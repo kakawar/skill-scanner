@@ -64,12 +64,18 @@ class ResponseParser:
         elif "```" in response_content:
             start = response_content.find("```") + 3
             end = response_content.find("```", start)
-            response_content = response_content[start:end].strip()
+            block = response_content[start:end].strip()
+            # Skip language identifier line (e.g. "python\n{...}")
+            first_newline = block.find("\n")
+            if first_newline != -1 and "{" not in block[:first_newline]:
+                block = block[first_newline:].strip()
+            response_content = block
 
         # Try to find JSON by braces
         start_idx = response_content.find("{")
         if start_idx != -1:
             brace_count = 0
+            last_close = -1
             for i in range(start_idx, len(response_content)):
                 if response_content[i] == "{":
                     brace_count += 1
@@ -77,7 +83,26 @@ class ResponseParser:
                     brace_count -= 1
                     if brace_count == 0:
                         json_str = response_content[start_idx : i + 1]
-                        parsed: dict[str, Any] = json.loads(json_str)
-                        return parsed
+                        try:
+                            parsed: dict[str, Any] = json.loads(json_str)
+                            return parsed
+                        except json.JSONDecodeError:
+                            pass
+                    last_close = i
+            # JSON 可能被截断（max_tokens 限制），尝试用最后一个完整 } 恢复
+            if last_close > start_idx:
+                json_str = response_content[start_idx : last_close + 1]
+                try:
+                    parsed = json.loads(json_str)
+                    return parsed
+                except json.JSONDecodeError:
+                    pass
 
-        raise ValueError(f"Could not parse JSON from response: {response_content[:200]}")
+        # 无法提取 JSON（如模型返回了纯 Markdown 叙述文本），视为无发现
+        import sys
+        print(
+            f"[llm_response_parser] WARNING: no JSON found in response, "
+            f"treating as no findings. Preview: {response_content[:120]!r}",
+            file=sys.stderr,
+        )
+        return {"findings": [], "overall_assessment": response_content[:500]}

@@ -212,9 +212,23 @@ class LLMRequestHandler:
                 # Works for: OpenAI, Anthropic Claude, Gemini (via LiteLLM), Bedrock, Vertex AI, Groq, Ollama, Databricks
                 if self.response_schema:
                     model_lower = self.provider_config.model.lower()
-                    unsupported_json_schema_providers = ["deepseek"]
-                    if any(p in model_lower for p in unsupported_json_schema_providers):
+                    base_url_lower = (self.provider_config.base_url or "").lower()
+                    unsupported_json_schema_providers = ["deepseek", "llmproxy", "venus"]
+                    use_json_object = any(
+                        p in model_lower or p in base_url_lower
+                        for p in unsupported_json_schema_providers
+                    )
+                    if use_json_object:
                         request_params["response_format"] = {"type": "json_object"}
+                        # json_object 模式不会自动约束格式，需在 system message 里强调
+                        for msg in request_params["messages"]:
+                            if msg.get("role") == "system":
+                                msg["content"] = (
+                                    msg["content"]
+                                    + "\n\nIMPORTANT: You MUST respond with valid JSON only. "
+                                    "Do not include any markdown, prose, or code outside the JSON object."
+                                )
+                                break
                     else:
                         request_params["response_format"] = {
                             "type": "json_schema",
